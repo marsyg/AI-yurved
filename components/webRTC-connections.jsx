@@ -14,15 +14,25 @@ const WebRTC = () => {
 
   useEffect(() => {
     console.log('Initializing Socket.io connection...');
-    socketRef.current = io('http://localhost:3001');
+    socketRef.current = io('https://3397-110-235-230-3.ngrok-free.app', {
+      transports: ['websocket'],
+    });
     socketRef.current.emit('join-room', roomId);
     console.log(`Joined room: ${roomId}`);
 
     // Initialize PeerConnection
     console.log('Initializing RTCPeerConnection...');
     const newPc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }, // Public STUN server
+        {
+          urls: 'turn:your-turn-server.com',
+          username: 'user',
+          credential: 'pass',
+        }, // TURN (if needed)
+      ],
     });
+
     pcRef.current = newPc;
 
     newPc.ontrack = (e) => {

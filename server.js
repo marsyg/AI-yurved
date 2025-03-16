@@ -44,6 +44,13 @@ io.on('connection', (socket) => {
     console.log('User disconnected:', socket.id);
   });
 });
+app.get('/', (req, res) => {
+  res.send('Server is running!');
+});
+app.use((req, res, next) => {
+  console.log(`Incoming request: ${req.method} ${req.url}`);
+  next();
+});
 
 httpServer.listen(3001, () => {
   console.log('Signaling server running on port 3001');
