@@ -4,17 +4,18 @@ import io from 'socket.io-client';
 const WebRTC = () => {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const [pc, setPc] = useState(null);
+  const pcRef = useRef(null);
+  const socketRef = useRef(null);
   const [incomingOffer, setIncomingOffer] = useState(null);
   const [isCallActive, setIsCallActive] = useState(false);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
-  const socket = useRef(null);
   const roomId = 'test-room';
+
   useEffect(() => {
     console.log('Initializing Socket.io connection...');
-    socket.current = io('http://localhost:3001');
-    socket.current.emit('join-room', roomId);
+    socketRef.current = io('http://localhost:3001');
+    socketRef.current.emit('join-room', roomId);
     console.log(`Joined room: ${roomId}`);
 
     // Initialize PeerConnection
@@ -22,6 +23,7 @@ const WebRTC = () => {
     const newPc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     });
+    pcRef.current = newPc;
 
     newPc.ontrack = (e) => {
       console.log('Received remote stream!');
@@ -35,7 +37,7 @@ const WebRTC = () => {
     newPc.onicecandidate = (e) => {
       if (e.candidate) {
         console.log('Generated ICE candidate:', e.candidate);
-        socket.current.emit('ice-candidate', e.candidate, roomId);
+        socketRef.current.emit('ice-candidate', e.candidate, roomId);
       } else {
         console.log('All ICE candidates have been generated.');
       }
@@ -52,47 +54,53 @@ const WebRTC = () => {
       console.log('Signaling state:', newPc.signalingState);
     };
 
-    setPc(newPc);
-
     // Socket event listeners
-    socket.current.on('offer', async (offer) => {
+    socketRef.current.on('offer', async (offer) => {
       console.log('Received offer from remote peer:', offer);
       setIncomingOffer(offer); // Store the incoming offer
     });
 
-    socket.current.on('answer', async (answer) => {
+    socketRef.current.on('answer', async (answer) => {
       console.log('Received answer from remote peer:', answer);
-      if (!pc) return;
-      await pc.setRemoteDescription(answer);
-      console.log('Remote description set.');
+      if (!pcRef.current) return;
+      try {
+        await pcRef.current.setRemoteDescription(answer);
+        console.log('Remote description set.');
+      } catch (error) {
+        console.error('Error setting remote description:', error);
+      }
     });
 
-    socket.current.on('ice-candidate', async (candidate) => {
+    socketRef.current.on('ice-candidate', async (candidate) => {
       console.log('Received ICE candidate from remote peer:', candidate);
-      if (!pc) return;
+      if (!pcRef.current) return;
       try {
-        await pc.addIceCandidate(candidate);
+        await pcRef.current.addIceCandidate(candidate);
         console.log('ICE candidate added successfully.');
       } catch (e) {
         console.error('Error adding ICE candidate:', e);
       }
     });
 
-    socket.current.on('user-connected', () => {
+    socketRef.current.on('user-connected', () => {
       console.log('Another user connected to the room.');
     });
 
-    // Chat message event
-    socket.current.on('chat-message', (message) => {
+    // Correct event listener name for chat messages
+    socketRef.current.on('receiveChat-message', (message) => {
       console.log('Received chat message:', message);
-      const recievedMessage = { ...message, sender: 'Remote' };
-      setMessages((prevMessages) => [...prevMessages, recievedMessage]);
+      const receivedMessage = { ...message, sender: 'Remote' };
+      setMessages((prevMessages) => [...prevMessages, receivedMessage]);
     });
 
     return () => {
       console.log('Cleaning up...');
-      newPc.close();
-      socket.current.disconnect();
+      if (pcRef.current) {
+        pcRef.current.close();
+      }
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
     };
   }, []);
 
@@ -105,20 +113,20 @@ const WebRTC = () => {
       });
       localVideoRef.current.srcObject = stream;
       console.log('Local video stream attached.');
+
       stream.getTracks().forEach((track) => {
-        pc.addTrack(track, stream);
+        pcRef.current.addTrack(track, stream);
         console.log('Added local track:', track.kind);
       });
 
       // Create offer when local stream is ready
       console.log('Creating offer...');
-      const offer = await pc.createOffer();
+      const offer = await pcRef.current.createOffer();
       console.log('Offer created:', offer);
-      await pc.setLocalDescription(offer);
+      await pcRef.current.setLocalDescription(offer);
       console.log('Local description set.');
-      socket.current.emit('offer', pc.localDescription, roomId);
+      socketRef.current.emit('offer', pcRef.current.localDescription, roomId);
 
-      socket.current.emit();
       setIsCallActive(true);
       console.log('Offer sent to remote peer.');
     } catch (error) {
@@ -127,26 +135,56 @@ const WebRTC = () => {
   };
 
   const answerCall = async () => {
-    if (!incomingOffer || !pc) return;
+    if (!incomingOffer || !pcRef.current) return;
 
-    console.log('Answering call...');
-    await pc.setRemoteDescription(incomingOffer);
-    console.log('Remote description set.');
+    try {
+      console.log('Starting local media stream to answer call...');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+      localVideoRef.current.srcObject = stream;
+      console.log('Local video stream attached.');
 
-    const answer = await pc.createAnswer();
-    console.log('Answer created:', answer);
-    await pc.setLocalDescription(answer);
-    console.log('Local description set.');
+      stream.getTracks().forEach((track) => {
+        pcRef.current.addTrack(track, stream);
+        console.log('Added local track:', track.kind);
+      });
 
-    socket.current.emit('answer', answer, roomId);
-    console.log('Answer sent to remote peer.');
+      console.log('Answering call...');
+      await pcRef.current.setRemoteDescription(incomingOffer);
+      console.log('Remote description set.');
 
-    setIncomingOffer(null); // Clear the incoming offer
+      const answer = await pcRef.current.createAnswer();
+      console.log('Answer created:', answer);
+      await pcRef.current.setLocalDescription(answer);
+      console.log('Local description set.');
+
+      socketRef.current.emit('answer', answer, roomId);
+      console.log('Answer sent to remote peer.');
+
+      setIncomingOffer(null); // Clear the incoming offer
+    } catch (error) {
+      console.error('Error answering call:', error);
+    }
   };
 
   const endCall = () => {
-    if (pc) {
-      pc.close();
+    if (pcRef.current) {
+      // Stop all local tracks
+      if (localVideoRef.current && localVideoRef.current.srcObject) {
+        localVideoRef.current.srcObject
+          .getTracks()
+          .forEach((track) => track.stop());
+        localVideoRef.current.srcObject = null;
+      }
+
+      pcRef.current.close();
+      // Create a new peer connection for potential future calls
+      pcRef.current = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      });
+
       setIsCallActive(false);
       console.log('Call ended.');
     }
@@ -155,7 +193,7 @@ const WebRTC = () => {
   const sendMessage = () => {
     if (newMessage.trim()) {
       const message = { sender: 'You', text: newMessage };
-      socket.current.emit('chat-message', message, roomId);
+      socketRef.current.emit('chat-message', message, roomId);
 
       setMessages((prevMessages) => [...prevMessages, message]);
       console.log('Sent chat message:', message);
@@ -164,45 +202,108 @@ const WebRTC = () => {
   };
 
   return (
-    <div>
-      <div>
-        <video ref={localVideoRef} autoPlay muted playsInline />
-        <video ref={remoteVideoRef} autoPlay playsInline />
+    <div
+      className='webrtc-container'
+      style={{ padding: '20px', maxWidth: '800px', margin: '0 auto' }}
+    >
+      <h2>WebRTC Video Chat</h2>
+
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          gap: '20px',
+          marginBottom: '20px',
+        }}
+      >
+        <div>
+          <h3>Your Video</h3>
+          <video
+            ref={localVideoRef}
+            autoPlay
+            muted
+            playsInline
+            style={{ width: '320px', border: '1px solid #ccc' }}
+          />
+        </div>
+        <div>
+          <h3>Remote Video</h3>
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            style={{ width: '320px', border: '1px solid #ccc' }}
+          />
+        </div>
       </div>
 
-      {!isCallActive && <button onClick={startCall}>Start Call</button>}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          marginBottom: '20px',
+        }}
+      >
+        {!isCallActive && <button onClick={startCall}>Start Call</button>}
 
-      {incomingOffer && !isCallActive && (
-        <div>
-          <p>Incoming call...</p>
-          <button onClick={answerCall}>Answer Call</button>
-        </div>
-      )}
+        {incomingOffer && !isCallActive && (
+          <div>
+            <p>Incoming call...</p>
+            <button onClick={answerCall}>Answer Call</button>
+          </div>
+        )}
+
+        {isCallActive && <button onClick={endCall}>End Call</button>}
+      </div>
 
       {isCallActive && (
-        <div>
-          <button onClick={endCall}>End Call</button>
-          <div>
-            <h3>Chat</h3>
-            <div
-              style={{
-                border: '1px solid #ccc',
-                padding: '10px',
-                height: '200px',
-                overflowY: 'scroll',
-              }}
-            >
-              {messages.map((msg, index) => (
-                <div key={index}>
+        <div className='chat-container'>
+          <h3>Chat</h3>
+          <div
+            style={{
+              border: '1px solid #ccc',
+              padding: '10px',
+              height: '200px',
+              overflowY: 'scroll',
+              marginBottom: '10px',
+              borderRadius: '5px',
+            }}
+          >
+            {messages.map((msg, index) => (
+              <div
+                key={index}
+                style={{
+                  textAlign: msg.sender === 'You' ? 'right' : 'left',
+                  marginBottom: '8px',
+                }}
+              >
+                <span
+                  style={{
+                    background: msg.sender === 'You' ? '#dcf8c6' : '#f1f0f0',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    display: 'inline-block',
+                    maxWidth: '80%',
+                  }}
+                >
                   <strong>{msg.sender}:</strong> {msg.text}
-                </div>
-              ))}
-            </div>
+                </span>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '10px' }}>
             <input
               type='text'
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+              style={{
+                flexGrow: 1,
+                padding: '8px',
+                borderRadius: '5px',
+                border: '1px solid #ccc',
+              }}
+              placeholder='Type a message...'
             />
             <button onClick={sendMessage}>Send</button>
           </div>

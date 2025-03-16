@@ -36,13 +36,15 @@ io.on('connection', (socket) => {
 
   socket.on('chat-message', (message, roomId) => {
     console.log(`Chat message received in room ${roomId}:`, message);
-     io.to(roomId).emit('chat-message', message);
+    // Fixed the typo in the event name and broadcasting to the room
+    socket.to(roomId).emit('receiveChat-message', message);
   });
 
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
   });
 });
+
 httpServer.listen(3001, () => {
   console.log('Signaling server running on port 3001');
 });
